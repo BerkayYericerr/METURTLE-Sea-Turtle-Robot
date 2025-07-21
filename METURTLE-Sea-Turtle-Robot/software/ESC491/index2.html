@@ -1,0 +1,384 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>METU-RTLE Web App</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: flex-end;
+            height: 100vh;
+        }
+
+        #map {
+            height: 100vh;
+            width: 70vw; /* Map takes 70% of the screen */
+        }
+
+        .content {
+            width: 30vw; /* Content takes 30% of the screen */
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        button {
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        button.active {
+            background-color: #f44336; /* Red color when active */
+        }
+
+        /* Scrollable list of marked points */
+        .marker-list {
+            margin-top: 20px;
+            max-height: 150px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+
+        .marker-list div {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            background-color: #eee;
+            padding: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .marker-list div button {
+            margin-left: 5px;
+            padding: 5px;
+            font-size: 12px;
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+        .marker-list div button.delete {
+            background-color: #f44336; /* Red for delete */
+        }
+
+        .marker-list div button.edit {
+            background-color: #FFC107; /* Yellow for edit */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="content">
+        <h1>Welcome to the METU-RTLE Web Application</h1>
+        <p>Use the button below to mark hatchling points on the map when enabled.</p>
+        <p id="status">Connecting...</p>
+        <p id="coordinates">Coordinates: Not received yet.</p>
+        <p id="ros_status">ROS client status: Not connected</p>
+        <button id="toggleButton">Mark Map</button>
+        <button id="startButton">Start Robot</button>
+
+        <!-- Scrollable list to display marked points -->
+        <div class="marker-list" id="markerList">
+            <strong>Marked Points:</strong>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Leaflet and Socket.IO scripts -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-rotatedmarker@0.2.0/leaflet.rotatedMarker.min.js"></script>
+
+
+    <script>
+        let map, markerCount = 0, markingEnabled = false;
+        const markerList = document.getElementById('markerList');
+        let startButtonPressed = false; // Tracks if start button was pressed
+        let markers = [];  // Marker'ları saklamak için dizi
+    
+        // Initialize the map and focus on Turkey
+        function initMap() {
+            map = L.map('map').setView([39.0, 35.0], 6);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+        }
+    
+        // Toggle map marking functionality
+        function toggleMarking() {
+            markingEnabled = !markingEnabled;
+            toggleButton.classList.toggle('active');
+            toggleButton.textContent = markingEnabled ? 'Marking Enabled' : 'Mark Map';
+        }
+    
+        // Track the last sent markers
+        let lastSentMarkers = null;
+
+        // Handle Start Button Click
+        function handleStartButtonClick() {
+            console.log("Start button clicked. Sending markers to server...");
+            
+            // Changing buttons look 
+            markingEnabled = !markingEnabled;
+            startButton.classList.toggle('active');
+            startButton.textContent = markingEnabled ? 'Stop' : 'Start Robot';
+
+            let payload;
+
+            if (markingEnabled) {
+                // If marking is enabled, send markers
+                if (markers.length === 0) {
+                    alert("No markers to send! Please add markers to the map.");
+                    return;
+                }
+
+                // Check if markers have changed
+                if (JSON.stringify(markers) === JSON.stringify(lastSentMarkers)) {
+                    // Markers unchanged, send a small payload
+                    payload = { markers: [1] };  // Indicate markers are unchanged
+                    console.log("Markers unchanged. Sending minimal payload.");
+                } else {
+                    // Markers changed, send full data
+                    payload = { markers };  // Send the list of markers
+                    lastSentMarkers = [...markers];  // Update the last sent markers
+                    console.log("Markers changed. Sending full payload.");
+                }
+            } else {
+                // If marking is disabled, send a single `[0]` to indicate stop
+                payload = { markers: [0] };
+                console.log("Stop command detected. Sending stop payload.");
+            }
+
+            fetch('http://localhost:5000/start_robot', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Start/Stop command response:', data);
+                if (data.status === 'success') {
+                    if (markingEnabled) {
+                        alert('Robot hedeflere gitmeye başladı.');
+                    } else {
+                        alert('Robot durduruldu.');
+                    }
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Failed to send command. Check the server.');
+            });
+        }
+
+
+        // Validate marker location by contacting backend
+        async function isValidLocation(lat, lng) {
+            try {
+                const response = await fetch('http://localhost:5000/validate_marker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat, lng })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'valid') {
+                    return true;
+                } else {
+                    alert(`Invalid marker: ${result.message || "Unknown error"}`);
+                    return false;
+                }
+            } catch (error) {
+                alert("Validation failed: " + error.message);
+                return false;
+            }
+        }
+
+        // Updated marker placement with backend validation
+        async function handleMapClick(e) {
+            if (markingEnabled) {
+                const { lat, lng } = e.latlng;
+
+                const isValid = await isValidLocation(lat, lng);
+                if (!isValid) return;
+
+                markerCount++;
+                markers.push({ id: markerCount, lat, lng });
+                addMarker(lat, lng, markerCount);
+                toggleMarking();
+            }
+        }
+    
+        // Add a marker to the map and the marker list
+        function addMarker(lat, lng, count) {
+            const marker = L.marker([lat, lng], { draggable: false }).addTo(map)
+                .bindPopup(`Marker ${count} added at: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`)
+                .openPopup();
+    
+            setTimeout(() => marker.closePopup(), 2000); // Auto-close popup after 2 seconds
+    
+            addMarkerToList(lat, lng, marker, count);
+        }
+    
+        // Add the marker details to the scrollable list
+        function addMarkerToList(lat, lng, marker, count) {
+            const markerItem = document.createElement('div');
+            markerItem.innerHTML = `
+                Marked ${count}: [${lat.toFixed(4)}, ${lng.toFixed(4)}]
+                <button class="edit">Edit</button>
+                <button class="delete">Delete</button>
+            `;
+    
+            markerList.appendChild(markerItem);
+    
+            // Add event listeners for marker interaction
+            addEventListenersToButtons(marker, markerItem, count);
+        }
+    
+        // Reassign event listeners after updating marker item innerHTML
+        function addEventListenersToButtons(marker, markerItem, count) {
+            const editButton = markerItem.querySelector('.edit');
+            const deleteButton = markerItem.querySelector('.delete');
+    
+            editButton.addEventListener('click', function() {
+                toggleEditMode(marker, markerItem, editButton, count);
+            });
+    
+            deleteButton.addEventListener('click', function() {
+                map.removeLayer(marker);
+                markerItem.remove();
+                // Diziden marker'ı sil
+                markers = markers.filter(m => m.id !== count);
+            });
+    
+            markerItem.addEventListener('click', function() {
+                map.setView(marker.getLatLng(), 10);
+                marker.openPopup();
+                setTimeout(() => marker.closePopup(), 2000);
+            });
+        }
+    
+        // Toggle edit/save mode for a marker
+        function toggleEditMode(marker, markerItem, editButton, count) {
+            if (editButton.textContent === 'Edit') {
+                marker.dragging.enable();
+                editButton.textContent = 'Save';
+            } else {
+                marker.dragging.disable();
+                const newLatLng = marker.getLatLng();
+                marker.setPopupContent(`Marker ${count} updated at: [${newLatLng.lat.toFixed(4)}, ${newLatLng.lng.toFixed(4)}]`).openPopup();
+                setTimeout(() => marker.closePopup(), 2000);
+    
+                // Marker listesinde koordinatları güncelle
+                const markerIndex = markers.findIndex(m => m.id === count);
+                if (markerIndex > -1) {
+                    markers[markerIndex].lat = newLatLng.lat;
+                    markers[markerIndex].lng = newLatLng.lng;
+                }
+    
+                markerItem.innerHTML = `
+                    Marked ${count}: [${newLatLng.lat.toFixed(4)}, ${newLatLng.lng.toFixed(4)}]
+                    <button class="edit">Edit</button>
+                    <button class="delete">Delete</button>
+                `;
+    
+                addEventListenersToButtons(marker, markerItem, count);
+                editButton.textContent = 'Edit';
+            }
+        }
+    
+        // Initialize socket.io for receiving coordinates
+        function initSocketIO() {
+            var socket = io.connect('http://localhost:5000');
+            let robotMarker = null;
+    
+            socket.on('connect', () => {
+                document.getElementById('status').innerText = 'Connected to Server';
+                console.log('Connected to server');
+            });
+    
+            socket.on('disconnect', () => {
+                document.getElementById('status').innerText = 'Disconnected from Server';
+                console.log('Disconnected from server');
+            });
+    
+            socket.on('connection_status', (data) => {
+                document.getElementById('status').innerText = data.status;
+                console.log(data.status);
+            });
+    
+            socket.on('ros_client_status', (data) => {
+                document.getElementById('ros_status').innerText = data.status;
+                console.log(status);
+            });
+    
+            socket.on('robot_coordinates', (data) => {
+                const { lat, lng, hdg } = data;
+    
+                // Update the coordinates display
+                document.getElementById('coordinates').innerText = `Coordinates: Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}, Hdg ${hdg.toFixed(4)}`;
+                console.log(`Robot is at: [${lat}, ${lng}]`);
+    
+                const robotIcon = L.icon({
+                    iconUrl: 'robot_icon.png',
+                    iconSize: [38, 38],
+                });
+    
+                // If robotMarker already exists, update its position and heading
+                if (robotMarker) {
+                    robotMarker.setLatLng([lat, lng]);
+                    robotMarker.setRotationAngle(hdg); // Rotate according to heading
+                } else {
+                    // If robotMarker does not exist, create it
+                    robotMarker = L.marker([lat, lng], { 
+                        icon: robotIcon,
+                        rotationAngle: hdg,  // Set initial rotation based on heading
+                        rotationOrigin: 'center center' 
+                    }).addTo(map)
+                    .bindPopup(`Robot is located at: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`);
+                }
+            });
+        }
+    
+        // Initialize the map and attach event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            initSocketIO();
+    
+            const toggleButton = document.getElementById('toggleButton');
+            toggleButton.addEventListener('click', toggleMarking);
+            map.on('click', handleMapClick);
+    
+            // Start Button Listener
+            const startButton = document.getElementById('startButton');
+            startButton.addEventListener('click', handleStartButtonClick);
+        });
+    </script>
+    
+    </body>
+</html>
